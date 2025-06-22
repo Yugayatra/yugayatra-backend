@@ -3,10 +3,19 @@ const mongoose = require('mongoose');
 class DatabaseConfig {
   constructor() {
     this.connectionString = process.env.MONGODB_URI || 'mongodb://localhost:27017/yugayatra_test_db';
+    
+    // Validate MongoDB URI in production
+    if (process.env.NODE_ENV === 'production' && !process.env.MONGODB_URI) {
+      console.error('❌ MONGODB_URI environment variable is required in production');
+      process.exit(1);
+    }
+    
     this.options = {
       maxPoolSize: 10,
-      serverSelectionTimeoutMS: 5000,
-      socketTimeoutMS: 45000
+      serverSelectionTimeoutMS: 10000, // Increased timeout
+      socketTimeoutMS: 45000,
+      connectTimeoutMS: 10000, // Added connection timeout
+      family: 4 // Force IPv4
     };
   }
 
