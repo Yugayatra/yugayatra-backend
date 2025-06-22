@@ -23,6 +23,9 @@ class DatabaseConfig {
     try {
       mongoose.set('strictQuery', false);
       
+      console.log('🔌 Attempting to connect to MongoDB...');
+      console.log('📍 Connection string:', this.connectionString.replace(/\/\/[^:]+:[^@]+@/, '//***:***@'));
+      
       const conn = await mongoose.connect(this.connectionString, this.options);
       
       console.log(`🗄️  MongoDB Connected: ${conn.connection.host}`);
@@ -34,6 +37,18 @@ class DatabaseConfig {
       return conn;
     } catch (error) {
       console.error('❌ Database connection error:', error.message);
+      console.error('🔍 Connection details:', {
+        mongoUri: this.connectionString ? 'Set' : 'Not set',
+        nodeEnv: process.env.NODE_ENV,
+        error: error.code || error.name
+      });
+      
+      // In development, continue without DB
+      if (process.env.NODE_ENV !== 'production') {
+        console.log('⚠️  Continuing without database in development mode');
+        return null;
+      }
+      
       process.exit(1);
     }
   }
