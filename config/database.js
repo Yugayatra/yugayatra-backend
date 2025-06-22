@@ -12,10 +12,13 @@ class DatabaseConfig {
     
     this.options = {
       maxPoolSize: 10,
-      serverSelectionTimeoutMS: 10000, // Increased timeout
+      serverSelectionTimeoutMS: 15000, // Increased timeout
       socketTimeoutMS: 45000,
-      connectTimeoutMS: 10000, // Added connection timeout
-      family: 4 // Force IPv4
+      connectTimeoutMS: 15000, // Added connection timeout
+      family: 4, // Force IPv4
+      directConnection: false,
+      tls: true,
+      tlsInsecure: false
     };
   }
 
