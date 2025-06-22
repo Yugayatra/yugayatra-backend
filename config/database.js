@@ -4,12 +4,9 @@ class DatabaseConfig {
   constructor() {
     this.connectionString = process.env.MONGODB_URI || 'mongodb://localhost:27017/yugayatra_test_db';
     this.options = {
-      useNewUrlParser: true,
-      useUnifiedTopology: true,
       maxPoolSize: 10,
       serverSelectionTimeoutMS: 5000,
-      socketTimeoutMS: 45000,
-      bufferMaxEntries: 0
+      socketTimeoutMS: 45000
     };
   }
 
