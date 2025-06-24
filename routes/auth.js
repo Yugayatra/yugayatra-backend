@@ -4,46 +4,42 @@ const bcrypt = require('bcryptjs');
 const User = require('../models/User');
 const Admin = require('../models/Admin');
 const jwtUtils = require('../utils/jwtUtils');
-const emailService = require('../utils/emailService');
-const smsService = require('../utils/smsService');
 const { protectUser, protectAdmin, logAuthAttempt } = require('../middleware/auth');
+const emailService = require('../utils/emailService');
 
 const router = express.Router();
 
-// Validation rules
+// Validation middleware
 const registrationValidation = [
-  body('phone')
-    .matches(/^\d{10}$/)
-    .withMessage('Please provide a valid 10-digit phone number'),
-  body('email')
-    .isEmail()
-    .normalizeEmail()
-    .withMessage('Please provide a valid email address'),
   body('fullName')
     .trim()
     .isLength({ min: 2, max: 100 })
     .withMessage('Full name must be between 2 and 100 characters'),
+  body('email')
+    .isEmail()
+    .normalizeEmail()
+    .withMessage('Please enter a valid email address'),
+  body('phone')
+    .matches(/^\d{10}$/)
+    .withMessage('Please enter a valid 10-digit phone number'),
+  body('dateOfBirth')
+    .isISO8601()
+    .withMessage('Please enter a valid date of birth'),
+  body('gender')
+    .isIn(['Male', 'Female', 'Other'])
+    .withMessage('Please select a valid gender'),
   body('termsAccepted')
     .equals('true')
-    .withMessage('Terms and conditions must be accepted'),
+    .withMessage('You must accept the terms and conditions'),
   body('dataProcessingConsent')
     .equals('true')
-    .withMessage('Data processing consent is required')
+    .withMessage('You must consent to data processing')
 ];
 
 const loginValidation = [
   body('phone')
     .matches(/^\d{10}$/)
-    .withMessage('Please provide a valid 10-digit phone number')
-];
-
-const otpValidation = [
-  body('phone')
-    .matches(/^\d{10}$/)
-    .withMessage('Please provide a valid 10-digit phone number'),
-  body('otp')
-    .matches(/^\d{6}$/)
-    .withMessage('OTP must be a 6-digit number')
+    .withMessage('Please enter a valid 10-digit phone number')
 ];
 
 // Helper function to handle validation errors
@@ -91,6 +87,8 @@ router.post('/register',
         fullName,
         termsAccepted: termsAccepted === 'true',
         dataProcessingConsent: dataProcessingConsent === 'true',
+        isVerified: true,
+        status: 'Active',
         ipAddress: req.authAttempt.ip,
         userAgent: req.authAttempt.userAgent,
         deviceInfo: {
@@ -100,83 +98,6 @@ router.post('/register',
         }
       });
       
-      // Generate and send OTP
-      const otp = user.generateOTP();
-      await user.save();
-      
-      // Send OTP via SMS and Email
-      const smsResult = await smsService.sendOTP(phone, otp, fullName, 'registration');
-      const emailResult = await emailService.sendOTP(email, otp, fullName, 'registration');
-      
-      console.log('📱 SMS Result:', smsResult.success ? 'Sent' : smsResult.error);
-      console.log('📧 Email Result:', emailResult.success ? 'Sent' : emailResult.error);
-      
-      // Log activity
-      user.logActivity && user.logActivity('registration_initiated', {
-        method: 'phone_email',
-        ip: req.authAttempt.ip
-      });
-      
-      res.status(201).json({
-        success: true,
-        message: 'Registration initiated. Please verify your phone number with the OTP sent.',
-        data: {
-          phone: phone,
-          email: email,
-          otpSent: {
-            sms: smsResult.success,
-            email: emailResult.success
-          }
-        }
-      });
-      
-    } catch (error) {
-      console.error('Registration Error:', error);
-      res.status(500).json({
-        success: false,
-        error: 'Registration failed. Please try again.'
-      });
-    }
-  }
-);
-
-// @route   POST /api/auth/verify-otp
-// @desc    Verify OTP and complete registration
-// @access  Public
-router.post('/verify-otp',
-  logAuthAttempt('user'),
-  otpValidation,
-  handleValidationErrors,
-  async (req, res) => {
-    try {
-      const { phone, otp } = req.body;
-      
-      // Find user by phone
-      const user = await User.findOne({ phone });
-      
-      if (!user) {
-        return res.status(400).json({
-          success: false,
-          error: 'User not found. Please register first.'
-        });
-      }
-      
-      // Verify OTP
-      const isOTPValid = user.verifyOTP(otp);
-      
-      if (!isOTPValid) {
-        await user.save(); // Save the incremented attempt count
-        
-        return res.status(400).json({
-          success: false,
-          error: 'Invalid or expired OTP',
-          attemptsRemaining: user.otp ? (5 - user.otp.attempts) : 0
-        });
-      }
-      
-      // Update user verification status
-      user.isVerified = true;
-      user.status = 'Active';
       await user.save();
       
       // Generate tokens
@@ -200,7 +121,13 @@ router.post('/verify-otp',
         testUrl: `${process.env.FRONTEND_URL || 'http://localhost:3000'}/test`
       });
       
-      res.status(200).json({
+      // Log activity
+      user.logActivity && user.logActivity('registration_completed', {
+        method: 'direct',
+        ip: req.authAttempt.ip
+      });
+      
+      res.status(201).json({
         success: true,
         message: 'Registration completed successfully',
         data: {
@@ -220,224 +147,32 @@ router.post('/verify-otp',
       });
       
     } catch (error) {
-      console.error('OTP Verification Error:', error);
+      console.error('Registration Error:', error);
       res.status(500).json({
         success: false,
-        error: 'OTP verification failed. Please try again.'
-      });
-    }
-  }
-);
-
-// @route   POST /api/auth/login
-// @desc    User login
-// @access  Public
-router.post('/login',
-  logAuthAttempt('user'),
-  loginValidation,
-  handleValidationErrors,
-  async (req, res) => {
-    try {
-      const { phone } = req.body;
-      
-      // Find user by phone
-      const user = await User.findOne({ phone });
-      
-      if (!user) {
-        return res.status(400).json({
-          success: false,
-          error: 'User not found. Please register first.'
-        });
-      }
-      
-      // Check if user is active
-      if (user.status !== 'Active') {
-        return res.status(400).json({
-          success: false,
-          error: 'Account is not active. Please contact support.'
-        });
-      }
-      
-      // Generate and send OTP for login
-      const otp = user.generateOTP();
-      await user.save();
-      
-      // Send OTP via SMS and Email
-      const smsResult = await smsService.sendOTP(phone, otp, user.fullName, 'login');
-      const emailResult = await emailService.sendOTP(user.email, otp, user.fullName, 'login');
-      
-      res.status(200).json({
-        success: true,
-        message: 'OTP sent successfully. Please verify to login.',
-        data: {
-          phone: phone,
-          otpSent: {
-            sms: smsResult.success,
-            email: emailResult.success
-          }
-        }
-      });
-      
-    } catch (error) {
-      console.error('Login Error:', error);
-      res.status(500).json({
-        success: false,
-        error: 'Login failed. Please try again.'
-      });
-    }
-  }
-);
-
-// @route   POST /api/auth/login-verify
-// @desc    Verify login OTP
-// @access  Public
-router.post('/login-verify',
-  logAuthAttempt('user'),
-  otpValidation,
-  handleValidationErrors,
-  async (req, res) => {
-    try {
-      const { phone, otp } = req.body;
-      
-      // Find user by phone
-      const user = await User.findOne({ phone });
-      
-      if (!user) {
-        return res.status(400).json({
-          success: false,
-          error: 'User not found'
-        });
-      }
-      
-      // Verify OTP
-      const isOTPValid = user.verifyOTP(otp);
-      
-      if (!isOTPValid) {
-        await user.save();
-        
-        return res.status(400).json({
-          success: false,
-          error: 'Invalid or expired OTP',
-          attemptsRemaining: user.otp ? (5 - user.otp.attempts) : 0
-        });
-      }
-      
-      // Update last login
-      user.lastLogin = new Date();
-      await user.save();
-      
-      // Generate tokens
-      const accessToken = jwtUtils.generateAccessToken(user);
-      const refreshToken = jwtUtils.generateRefreshToken(user);
-      
-      if (!accessToken.success || !refreshToken.success) {
-        return res.status(500).json({
-          success: false,
-          error: 'Token generation failed'
-        });
-      }
-      
-      res.status(200).json({
-        success: true,
-        message: 'Login successful',
-        data: {
-          user: {
-            id: user._id,
-            phone: user.phone,
-            email: user.email,
-            name: user.fullName,
-            isVerified: user.isVerified,
-            profileCompleted: !!user.profileCompletedAt
-          },
-          tokens: {
-            accessToken: accessToken.token,
-            refreshToken: refreshToken.token,
-            expiresIn: accessToken.expiresIn
-          }
-        }
-      });
-      
-    } catch (error) {
-      console.error('Login Verify Error:', error);
-      res.status(500).json({
-        success: false,
-        error: 'Login verification failed. Please try again.'
-      });
-    }
-  }
-);
-
-// @route   POST /api/auth/resend-otp
-// @desc    Resend OTP
-// @access  Public
-router.post('/resend-otp',
-  loginValidation,
-  handleValidationErrors,
-  async (req, res) => {
-    try {
-      const { phone } = req.body;
-      
-      // Find user by phone
-      const user = await User.findOne({ phone });
-      
-      if (!user) {
-        return res.status(400).json({
-          success: false,
-          error: 'User not found'
-        });
-      }
-      
-      // Check if user has exceeded OTP attempts
-      if (user.otp && user.otp.attempts >= 5) {
-        return res.status(429).json({
-          success: false,
-          error: 'Too many OTP attempts. Please try again later.'
-        });
-      }
-      
-      // Generate and send new OTP
-      const otp = user.generateOTP();
-      await user.save();
-      
-      // Send OTP via SMS and Email
-      const smsResult = await smsService.sendOTP(phone, otp, user.fullName);
-      const emailResult = await emailService.sendOTP(user.email, otp, user.fullName);
-      
-      res.status(200).json({
-        success: true,
-        message: 'OTP resent successfully',
-        data: {
-          otpSent: {
-            sms: smsResult.success,
-            email: emailResult.success
-          }
-        }
-      });
-      
-    } catch (error) {
-      console.error('Resend OTP Error:', error);
-      res.status(500).json({
-        success: false,
-        error: 'Failed to resend OTP. Please try again.'
+        error: 'Registration failed. Please try again.'
       });
     }
   }
 );
 
 // @route   POST /api/auth/admin/login
-// @desc    Admin login with phone and OTP
+// @desc    Admin login with phone and password
 // @access  Public
 router.post('/admin/login',
   logAuthAttempt('admin'),
   [
     body('phone')
       .equals(process.env.ADMIN_PHONE || '9972037182')
-      .withMessage('Unauthorized access')
+      .withMessage('Unauthorized access'),
+    body('password')
+      .isLength({ min: 6 })
+      .withMessage('Password must be at least 6 characters')
   ],
   handleValidationErrors,
   async (req, res) => {
     try {
-      const { phone } = req.body;
+      const { phone, password } = req.body;
       
       // Find or create admin
       let admin = await Admin.findOne({ phone });
@@ -450,6 +185,7 @@ router.post('/admin/login',
           role: 'Super Admin',
           status: 'Active',
           isVerified: true,
+          password: process.env.ADMIN_PASSWORD || 'admin123',
           permissions: {
             users: { view: true, create: true, edit: true, delete: true },
             questions: { view: true, create: true, edit: true, delete: true, approve: true, bulkUpload: true },
@@ -457,6 +193,7 @@ router.post('/admin/login',
             system: { settings: true, backup: true, logs: true, reports: true }
           }
         });
+        await admin.save();
       }
       
       // Check if admin account is locked
@@ -467,75 +204,16 @@ router.post('/admin/login',
         });
       }
       
-      // Generate and send OTP
-      const otp = admin.generateOTP();
-      await admin.save();
+      // Verify password
+      const isPasswordValid = await admin.matchPassword(password);
       
-      // Send OTP via SMS
-      const smsResult = await smsService.sendOTP(phone, otp, admin.fullName, 'admin login');
-      
-      // Log activity
-      await admin.logActivity('login_attempt', {
-        ip: req.authAttempt.ip,
-        userAgent: req.authAttempt.userAgent
-      }, req);
-      
-      res.status(200).json({
-        success: true,
-        message: 'Admin OTP sent successfully',
-        data: {
-          otpSent: smsResult.success
-        }
-      });
-      
-    } catch (error) {
-      console.error('Admin Login Error:', error);
-      res.status(500).json({
-        success: false,
-        error: 'Admin login failed. Please try again.'
-      });
-    }
-  }
-);
-
-// @route   POST /api/auth/admin/verify
-// @desc    Verify admin OTP and login
-// @access  Public
-router.post('/admin/verify',
-  logAuthAttempt('admin'),
-  [
-    body('phone')
-      .equals(process.env.ADMIN_PHONE || '9972037182')
-      .withMessage('Unauthorized access'),
-    body('otp')
-      .matches(/^\d{6}$/)
-      .withMessage('OTP must be a 6-digit number')
-  ],
-  handleValidationErrors,
-  async (req, res) => {
-    try {
-      const { phone, otp } = req.body;
-      
-      // Find admin
-      const admin = await Admin.findOne({ phone });
-      
-      if (!admin) {
-        return res.status(400).json({
-          success: false,
-          error: 'Admin not found'
-        });
-      }
-      
-      // Verify OTP
-      const isOTPValid = admin.verifyOTP(otp);
-      
-      if (!isOTPValid) {
+      if (!isPasswordValid) {
         await admin.incLoginAttempts();
         
         return res.status(400).json({
           success: false,
-          error: 'Invalid or expired OTP',
-          attemptsRemaining: admin.otp ? (5 - admin.otp.attempts) : 0
+          error: 'Invalid credentials',
+          attemptsRemaining: 5 - (admin.loginAttempts || 0)
         });
       }
       
@@ -579,10 +257,10 @@ router.post('/admin/verify',
       });
       
     } catch (error) {
-      console.error('Admin Verify Error:', error);
+      console.error('Admin Login Error:', error);
       res.status(500).json({
         success: false,
-        error: 'Admin verification failed. Please try again.'
+        error: 'Admin login failed. Please try again.'
       });
     }
   }

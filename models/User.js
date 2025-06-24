@@ -138,16 +138,6 @@ const userSchema = new mongoose.Schema({
     idCard: String
   },
   
-  // OTP Verification
-  otp: {
-    code: String,
-    expiresAt: Date,
-    attempts: {
-      type: Number,
-      default: 0
-    }
-  },
-  
   // Test Related Information
   testInfo: {
     totalAttempts: {
@@ -244,34 +234,6 @@ userSchema.pre('save', async function(next) {
 userSchema.methods.matchPassword = async function(enteredPassword) {
   if (!this.password) return false;
   return await bcrypt.compare(enteredPassword, this.password);
-};
-
-// Method to generate and save OTP
-userSchema.methods.generateOTP = function() {
-  const otp = Math.floor(100000 + Math.random() * 900000).toString();
-  this.otp = {
-    code: otp,
-    expiresAt: new Date(Date.now() + 10 * 60 * 1000), // 10 minutes
-    attempts: 0
-  };
-  return otp;
-};
-
-// Method to verify OTP
-userSchema.methods.verifyOTP = function(enteredOTP) {
-  if (!this.otp?.code) return false;
-  if (new Date() > this.otp.expiresAt) return false;
-  if (this.otp.attempts >= 5) return false;
-  
-  this.otp.attempts += 1;
-  
-  if (this.otp.code === enteredOTP) {
-    this.otp = undefined;
-    this.isVerified = true;
-    return true;
-  }
-  
-  return false;
 };
 
 // Method to check if user can attempt test

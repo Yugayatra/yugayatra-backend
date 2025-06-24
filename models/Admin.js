@@ -70,16 +70,6 @@ const adminSchema = new mongoose.Schema({
     minlength: [6, 'Password must be at least 6 characters']
   },
   
-  // OTP for phone verification
-  otp: {
-    code: String,
-    expiresAt: Date,
-    attempts: {
-      type: Number,
-      default: 0
-    }
-  },
-  
   // Account Status
   status: {
     type: String,
@@ -217,7 +207,6 @@ const adminSchema = new mongoose.Schema({
     virtuals: true,
     transform: function(doc, ret) {
       delete ret.password;
-      delete ret.otp;
       delete ret.twoFactorAuth.secret;
       delete ret.apiAccess.apiSecret;
       return ret;
@@ -259,35 +248,6 @@ adminSchema.pre('save', async function(next) {
 adminSchema.methods.matchPassword = async function(enteredPassword) {
   if (!this.password) return false;
   return await bcrypt.compare(enteredPassword, this.password);
-};
-
-// Method to generate and save OTP
-adminSchema.methods.generateOTP = function() {
-  const otp = Math.floor(100000 + Math.random() * 900000).toString();
-  this.otp = {
-    code: otp,
-    expiresAt: new Date(Date.now() + 10 * 60 * 1000), // 10 minutes
-    attempts: 0
-  };
-  return otp;
-};
-
-// Method to verify OTP
-adminSchema.methods.verifyOTP = function(enteredOTP) {
-  if (!this.otp?.code) return false;
-  if (new Date() > this.otp.expiresAt) return false;
-  if (this.otp.attempts >= 5) return false;
-  
-  this.otp.attempts += 1;
-  
-  if (this.otp.code === enteredOTP) {
-    this.otp = undefined;
-    this.isVerified = true;
-    this.status = 'Active';
-    return true;
-  }
-  
-  return false;
 };
 
 // Method to handle failed login attempts
